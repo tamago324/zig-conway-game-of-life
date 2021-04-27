@@ -8,6 +8,8 @@ const c = @cImport({
 // 状態
 const STATE = enum { DEAD = 0, LIVE = 1 };
 
+const stdout = std.io.getStdOut();
+
 fn Grid() type {
     return struct {
         const Self = @This();
@@ -111,26 +113,26 @@ fn Grid() type {
             self.grid = new_grid;
         }
 
-        fn refresh(self: *Self, bfwriter: anytype) !void {
+        fn refresh(self: *Self) !void {
             // ESC は 16進数で \x1B となる
             // ESC[2J で画面クリア
 
             // 画面のクリア
-            try bfwriter.writer().print("\x1B[2J\x1B[H", .{});
-            try bfwriter.flush();
+            try stdout.writeAll("\x1B[2J\x1B[H");
         }
 
         // 描画
-        pub fn update(self: *Self, bfwriter: anytype) !void {
-            try self.refresh(bfwriter);
-
-            // TODO: 配列に入れて、１つ文字列を表示させる
+        pub fn update(self: *Self, allocator: *std.mem.Allocator) !void {
+            try self.refresh();
 
             var row: u8 = 0;
+            var lines = std.ArrayList([]const u8).init(allocator);
             while (row < self.height) : (row += 1) {
-                try bfwriter.writer().print("\n", .{});
-
                 var col: u8 = 0;
+
+                // 文字のリスト
+                var cells = std.ArrayList([]const u8).init(allocator);
+
                 while (col < self.width) : (col += 1) {
                     const ch = switch (self.cellValue(row, col)) {
                         .DEAD => "  ",
@@ -138,11 +140,17 @@ fn Grid() type {
                         // ESC[0m 戻す
                         .LIVE => "\x1B[7m  \x1B[0m",
                     };
-                    _ = try bfwriter.writer().write(ch);
+
+                    try cells.append(ch);
                 }
+                // cell.items は &[_][]const u8
+                // []const u8 => 文字列
+                // [_] => スライス
+                // & => 参照
+                try lines.append(try std.mem.join(allocator, "", cells.items));
             }
 
-            try bfwriter.flush();
+            try stdout.writeAll(try std.mem.join(allocator, "\n", lines.items));
         }
     };
 }
@@ -155,7 +163,6 @@ const Size = struct {
 // ターミナルのサイズを取得する
 fn winsize() Size {
     var ws: c.winsize = undefined;
-    var stdout = std.io.getStdOut();
 
     if (c.ioctl(stdout.handle, c.TIOCGWINSZ, &ws) != -1) {
         return .{
@@ -201,10 +208,8 @@ pub fn main() !void {
     var width = size.columns / 2;
     var grid = try Grid().init(allocator, size.rows, width);
 
-    var bfwriter = std.io.bufferedWriter(std.io.getStdOut().writer());
-
     while (true) {
-        try grid.update(&bfwriter);
+        try grid.update(allocator);
         try grid.nextGeneration(allocator);
         time.sleep(ms_interval);
     }
